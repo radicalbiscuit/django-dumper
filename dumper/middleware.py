@@ -5,6 +5,9 @@ import dumper.utils
 from dumper.logging_utils import MiddlewareLogger
 
 
+_ongoing_requests_with_caches = []
+
+
 class FetchFromCacheMiddleware(object):
     """
     Request-phase middleware that checks to make sure this cache has been
@@ -20,6 +23,10 @@ class FetchFromCacheMiddleware(object):
         if self.should_retrieve_cache(request):
             key = dumper.utils.cache_key_from_request(request)
             value = dumper.utils.cache.get(key)
+
+            if value:
+                _ongoing_requests_with_caches.append(request)
+
             MiddlewareLogger.get(key, value, request)
             return value
         else:
@@ -37,7 +44,8 @@ class UpdateCacheMiddleware(object):
         return all([
             request.method in dumper.settings.CACHABLE_METHODS,
             response.status_code in dumper.settings.CACHABLE_RESPONSE_CODES,
-            not re.match(dumper.settings.PATH_IGNORE_REGEX(), request.path)
+            not re.match(dumper.settings.PATH_IGNORE_REGEX(), request.path),
+            not request in _ongoing_requests_with_caches,
         ])
 
     def process_response(self, request, response):
@@ -45,6 +53,16 @@ class UpdateCacheMiddleware(object):
             key = dumper.utils.cache_key_from_request(request)
             MiddlewareLogger.save(key, request)
             dumper.utils.cache.set(key, response, None)
+        elif request in _ongoing_requests_with_caches:
+            try:
+                _ongoing_requests_with_caches.remove(request)
+                MiddlewareLogger.not_save(request)
+            except ValueError:
+                # This /really/ shouldn't happen as we just tested for
+                # membership. Race conditions maybe?
+                key = dumper.utils.cache_key_from_request(request)
+                MiddlewareLogger.save(key, request)
+                dumper.utils.cache.set(key, response, None)
         else:
             MiddlewareLogger.not_save(request)
         return response
