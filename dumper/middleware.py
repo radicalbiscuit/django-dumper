@@ -44,7 +44,7 @@ class UpdateCacheMiddleware(object):
         if self.should_cache(request, response):
             key = dumper.utils.cache_key_from_request(request)
             MiddlewareLogger.save(key, request)
-            dumper.utils.cache.set(key, response)
+            dumper.utils.cache.set(key, response, None)
         else:
             MiddlewareLogger.not_save(request)
         return response
