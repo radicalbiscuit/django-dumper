@@ -1,11 +1,10 @@
 import re
 
+from django.utils.cache import patch_response_headers
+
 import dumper.settings
 import dumper.utils
 from dumper.logging_utils import MiddlewareLogger
-
-
-_ongoing_requests_with_caches = []
 
 
 class FetchFromCacheMiddleware(object):
@@ -15,7 +14,6 @@ class FetchFromCacheMiddleware(object):
 
     Must be used in place of FetchFromCacheMiddleware.
     """
-
     def should_retrieve_cache(self, request):
         return not re.match(dumper.settings.PATH_IGNORE_REGEX(), request.path)
 
@@ -23,9 +21,6 @@ class FetchFromCacheMiddleware(object):
         if self.should_retrieve_cache(request):
             key = dumper.utils.cache_key_from_request(request)
             value = dumper.utils.cache.get(key)
-
-            if value:
-                _ongoing_requests_with_caches.append(request)
 
             MiddlewareLogger.get(key, value, request)
             return value
@@ -45,26 +40,22 @@ class UpdateCacheMiddleware(object):
             request.method in dumper.settings.CACHABLE_METHODS,
             response.status_code in dumper.settings.CACHABLE_RESPONSE_CODES,
             not re.match(dumper.settings.PATH_IGNORE_REGEX(), request.path),
-            not request in _ongoing_requests_with_caches,
+            not response.get('From-Cache', False),
         ])
 
     def process_response(self, request, response):
         if self.should_cache(request, response):
             key = dumper.utils.cache_key_from_request(request)
             MiddlewareLogger.save(key, request)
-            dumper.utils.cache.set(key, response, None)
-        elif request in _ongoing_requests_with_caches:
-            try:
-                _ongoing_requests_with_caches.remove(request)
-                MiddlewareLogger.not_save(request)
-            except ValueError:
-                # This /really/ shouldn't happen as we just tested for
-                # membership. Race conditions maybe?
-                key = dumper.utils.cache_key_from_request(request)
-                MiddlewareLogger.save(key, request)
-                dumper.utils.cache.set(
-                    key, response, datetime.max.replace(microsecond=0)
-                )
+
+            # Set a header so we don't cache this response in the future.
+            response['From-Cache'] = True
+
+            # Get some cache-related durations, set Django's standard cache
+            # headers, and set the cache itself.
+            forever_from_now, cache_forever = dumper.utils.get_forever()
+            patch_response_headers(response, cache_timeout=forever_from_now)
+            dumper.utils.cache.set(key, response, cache_forever)
         else:
             MiddlewareLogger.not_save(request)
         return response
