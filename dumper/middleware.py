@@ -62,7 +62,9 @@ class UpdateCacheMiddleware(object):
                 # membership. Race conditions maybe?
                 key = dumper.utils.cache_key_from_request(request)
                 MiddlewareLogger.save(key, request)
-                dumper.utils.cache.set(key, response, None)
+                dumper.utils.cache.set(
+                    key, response, datetime.max.replace(microsecond=0)
+                )
         else:
             MiddlewareLogger.not_save(request)
         return response
